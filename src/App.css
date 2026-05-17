@@ -8,15 +8,40 @@ html, body, #root {
   font-family: Roboto, sans-serif;
 }
 
-.app-layout {
-  height: 100vh;
-  width: 100vw;
-  display: flex;
-  overflow: hidden;
+/* InfoWindow 样式 - 极简模式 */
+.info-window-card {
+  padding: 2px 4px;
+  min-width: 160px;
 }
 
-.main-content {
+.info-window-title {
+  display: none;
+}
+
+.info-window-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.info-row {
+  display: flex;
+  align-items: flex-start;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.info-label {
+  color: #888;
+  width: 60px;
+  flex-shrink: 0;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.info-value {
+  color: #333;
+  word-break: break-all;
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  font-family: monospace;
 }
