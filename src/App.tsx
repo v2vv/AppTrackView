@@ -1,37 +1,32 @@
 import { useState, useEffect } from 'react'
-import { getSupabase } from './supabaseClient'
+import { supabase } from './utils/supabase'
 import './App.css'
 
 function App() {
-  const [url, setUrl] = useState('')
-  const [key, setKey] = useState('')
   const [tables, setTables] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showSqlGuide, setShowSqlGuide] = useState(false)
 
   useEffect(() => {
-    const savedUrl = localStorage.getItem('supabase_url')
-    const savedKey = localStorage.getItem('supabase_key')
-    if (savedUrl) setUrl(savedUrl)
-    if (savedKey) setKey(savedKey)
+    fetchTables()
   }, [])
 
   const fetchTables = async () => {
-    if (!url || !key) {
-      setError('请输入 Supabase URL 和 Anon Key')
-      return
-    }
-
     setLoading(true)
     setError(null)
-    setTables([])
-    setShowSqlGuide(false)
 
     try {
+      const url = import.meta.env.VITE_SUPABASE_URL
+      const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+
+      if (!url || !key) {
+        setError('环境变量中缺失 Supabase 凭据，请检查 .env 文件。')
+        return
+      }
+
       let tableNamesSet = new Set<string>()
 
-      // 探测方法 1: Postgrest OpenAPI 规范 (最常用且 Anon 友好)
+      // 自动探测：尝试通过 OpenAPI 获取定义
       try {
         const restUrl = `${url.replace(/\/$/, '')}/rest/v1/`
         const response = await fetch(restUrl, {
@@ -42,128 +37,52 @@ function App() {
         })
         if (response.ok) {
           const data = await response.json()
-          // 检查 definitions
           if (data.definitions) {
             Object.keys(data.definitions).forEach(name => tableNamesSet.add(name))
           }
-          // 检查 paths (有时 definitions 不完整)
-          if (data.paths) {
-            Object.keys(data.paths).forEach(path => {
-              const name = path.replace(/^\//, '').split('?')[0]
-              if (name && name !== 'rpc' && !name.includes('/')) {
-                tableNamesSet.add(name)
-              }
-            })
-          }
         }
-      } catch (e) { console.error('OpenAPI fetch failed', e) }
-
-      // 探测方法 2: 直接通过 RPC (如果用户已经运行了 SQL 函数)
-      if (tableNamesSet.size === 0) {
-        try {
-          const supabase = getSupabase(url, key)
-          const { data: rpcData } = await supabase.rpc('get_tables')
-          if (rpcData && Array.isArray(rpcData)) {
-            rpcData.forEach((t: any) => tableNamesSet.add(t.table_name || t.tablename))
-          }
-        } catch (e) { console.error('RPC failed', e) }
+      } catch (e) {
+        console.error('OpenAPI fetch failed', e)
       }
 
-      // 探测方法 3: 尝试查询 information_schema.tables (部分配置允许)
+      // 如果 OpenAPI 没找到，尝试 RPC
       if (tableNamesSet.size === 0) {
-        try {
-          const supabase = getSupabase(url, key)
-          const { data } = await supabase
-            .from('information_schema.tables')
-            .select('table_name')
-            .eq('table_schema', 'public')
-          if (data) {
-            data.forEach((t: any) => tableNamesSet.add(t.table_name))
-          }
-        } catch (e) { console.error('Information schema query failed', e) }
+        const { data: rpcData } = await supabase.rpc('get_tables')
+        if (rpcData && Array.isArray(rpcData)) {
+          rpcData.forEach((t: any) => tableNamesSet.add(t.table_name || t.tablename))
+        }
       }
 
       const finalTables = Array.from(tableNamesSet).sort()
 
       if (finalTables.length > 0) {
         setTables(finalTables)
-        localStorage.setItem('supabase_url', url)
-        localStorage.setItem('supabase_key', key)
       } else {
-        setError('未能自动检测到表。')
-        setShowSqlGuide(true)
+        setError('未能自动检测到表。如果您的数据库有表，请参考之前的 SQL 函数指南。')
       }
     } catch (err: any) {
-      setError(`连接错误: ${err.message}`)
+      setError(`加载失败: ${err.message}`)
     } finally {
       setLoading(false)
     }
   }
 
-  const clearSavedCredentials = () => {
-    localStorage.removeItem('supabase_url')
-    localStorage.removeItem('supabase_key')
-    setUrl('')
-    setKey('')
-    setTables([])
-    setShowSqlGuide(false)
-    setError(null)
-  }
-
   return (
     <div className="container">
-      <h1>Supabase Explorer</h1>
+      <h1>AppTrackView</h1>
+      <p className="subtitle">已连接至：{import.meta.env.VITE_SUPABASE_URL}</p>
       
-      <div className="input-group">
-        <input 
-          type="text" 
-          placeholder="Supabase Project URL" 
-          value={url} 
-          onChange={(e) => setUrl(e.target.value)} 
-        />
-        <input 
-          type="password" 
-          placeholder="Anon Key" 
-          value={key} 
-          onChange={(e) => setKey(e.target.value)} 
-        />
-        <div className="button-row">
-          <button onClick={fetchTables} disabled={loading} className="primary-btn">
-            {loading ? '正在探测...' : '连接并获取'}
-          </button>
-          <button onClick={clearSavedCredentials} className="secondary-btn">
-            清除记录
-          </button>
-        </div>
-      </div>
-
       {error && (
         <div className="error-box">
           <p>{error}</p>
-          {showSqlGuide && (
-            <div className="sql-guide">
-              <p>请在您的 Supabase <b>SQL Editor</b> 中运行以下代码以允许应用列出表：</p>
-              <pre>
-{`CREATE OR REPLACE FUNCTION get_tables()
-RETURNS TABLE (table_name text) 
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  RETURN QUERY SELECT tablename::text 
-  FROM pg_tables 
-  WHERE schemaname = 'public';
-END;
-$$;`}
-              </pre>
-            </div>
-          )}
         </div>
       )}
 
       <div className="table-list">
-        <h2>表列表 ({tables.length})</h2>
-        {tables.length > 0 ? (
+        <h2>数据库表 ({tables.length})</h2>
+        {loading ? (
+          <p className="loading-hint">正在扫描数据库...</p>
+        ) : tables.length > 0 ? (
           <ul>
             {tables.map(table => (
               <li key={table}>
@@ -173,8 +92,12 @@ $$;`}
             ))}
           </ul>
         ) : (
-          !loading && !error && <p className="empty-hint">暂无数据，请尝试连接</p>
+          !error && <p className="empty-hint">未找到公开表</p>
         )}
+      </div>
+
+      <div className="footer">
+        <button onClick={fetchTables} className="refresh-btn">刷新列表</button>
       </div>
     </div>
   )
