@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './utils/supabase'
-import { APILoader, Map, Marker } from '@uiw/react-amap'
+import { APILoader, Map, Marker, InfoWindow } from '@uiw/react-amap'
 import { wgs84ToGcj02 } from './utils/coordTransform'
 import './App.css'
 
@@ -15,6 +15,9 @@ interface TableDataState {
   data: any[];
   loading: boolean;
   error: string | null;
+  startTime?: string;
+  endTime?: string;
+  timeInputType?: string;
 }
 
 function App() {
@@ -28,6 +31,8 @@ function App() {
   const [expandedTables, setExpandedTables] = useState<string[]>([])
   // 数据缓存图
   const [tableDataMap, setTableDataMap] = useState<Record<string, TableDataState>>({})
+  // 弹窗状态记录图
+  const [activeMarkerMap, setActiveMarkerMap] = useState<Record<string, any>>({})
 
   useEffect(() => {
     fetchTables()
@@ -100,36 +105,70 @@ function App() {
     }
   }
 
-  const fetchTableData = async (tableName: string) => {
+  const fetchTableData = async (tableName: string, overrideStartTime?: string, overrideEndTime?: string) => {
+    const currentState = tableDataMap[tableName] || {};
+    const startTime = overrideStartTime !== undefined ? overrideStartTime : currentState.startTime;
+    const endTime = overrideEndTime !== undefined ? overrideEndTime : currentState.endTime;
+
     // 设置该表为加载中
     setTableDataMap(prev => ({
       ...prev,
-      [tableName]: { ...(prev[tableName] || { data: [] }), loading: true, error: null }
+      [tableName]: { ...(prev[tableName] || { data: [] }), loading: true, error: null, startTime, endTime, timeInputType: currentState.timeInputType }
     }))
     
     try {
-      const { data, error: fetchError } = await supabase
-        .from(tableName)
-        .select('*')
+      let query = supabase.from(tableName).select('*')
+
+      if (startTime) {
+        query = query.gte('timestamp', startTime.replace('T', ' '));
+      }
+      if (endTime) {
+        query = query.lte('timestamp', endTime.replace('T', ' '));
+      }
+      
+      const { data, error: fetchError } = await query
       
       if (fetchError) {
         setTableDataMap(prev => ({
           ...prev,
-          [tableName]: { data: [], loading: false, error: fetchError.message }
+          [tableName]: { data: [], loading: false, error: fetchError.message, startTime, endTime, timeInputType: currentState.timeInputType }
         }))
       } else {
+        let detectedType = currentState.timeInputType || 'text';
+        if (data && data.length > 0 && !currentState.timeInputType) {
+          // 扫描数据，判断是否包含完整日期格式
+          const hasDateTime = data.some(row => row.timestamp && /^\d{4}-\d{2}-\d{2}/.test(String(row.timestamp)));
+          if (hasDateTime) {
+            detectedType = 'datetime-local';
+          } else {
+            const hasTime = data.some(row => row.timestamp && /^\d{1,2}:\d{2}(:\d{2})?$/.test(String(row.timestamp)));
+            if (hasTime) {
+              detectedType = 'time';
+            } else if (data.some(row => row.timestamp && !isNaN(Number(row.timestamp)))) {
+              detectedType = 'number';
+            }
+          }
+        }
+
         setTableDataMap(prev => ({
           ...prev,
-          [tableName]: { data: data || [], loading: false, error: null }
+          [tableName]: { data: data || [], loading: false, error: null, startTime, endTime, timeInputType: detectedType }
         }))
       }
     } catch (err: any) {
       setTableDataMap(prev => ({
         ...prev,
-        [tableName]: { data: [], loading: false, error: err.message }
+        [tableName]: { data: [], loading: false, error: err.message, startTime, endTime, timeInputType: currentState.timeInputType }
       }))
     }
   }
+
+  const handleTimeChange = (tableName: string, field: 'startTime' | 'endTime', value: string) => {
+    setTableDataMap(prev => ({
+      ...prev,
+      [tableName]: { ...(prev[tableName] || { data: [], loading: false, error: null }), [field]: value }
+    }));
+  };
 
   const handleTableClick = (tableName: string) => {
     if (expandedTables.includes(tableName)) {
@@ -178,7 +217,7 @@ function App() {
 
   const renderDataPanel = (tableName: string) => {
     const state = tableDataMap[tableName] || { data: [], loading: true, error: null };
-    const { data: tableData, loading: dataLoading, error: dataError } = state;
+    const { data: tableData, loading: dataLoading, error: dataError, startTime = '', endTime = '', timeInputType = 'text' } = state;
 
     // 检查并转换坐标数据
     const locationData = tableData
@@ -205,7 +244,30 @@ function App() {
         <div className="data-header">
           <h3>数据预览: <code className="table-name-code">{tableName}</code></h3>
           <div className="data-header-actions">
-            <button className="refresh-small-btn" onClick={() => fetchTableData(tableName)}>刷新</button>
+            <div className="time-filter">
+              <input 
+                type={timeInputType} 
+                step="1"
+                placeholder={timeInputType === 'text' ? '开始时间' : ''}
+                value={startTime} 
+                onChange={(e) => handleTimeChange(tableName, 'startTime', e.target.value)}
+                className="time-input"
+                title="开始时间"
+              />
+              <span className="time-separator">-</span>
+              <input 
+                type={timeInputType} 
+                step="1"
+                placeholder={timeInputType === 'text' ? '结束时间' : ''}
+                value={endTime} 
+                onChange={(e) => handleTimeChange(tableName, 'endTime', e.target.value)}
+                className="time-input"
+                title="结束时间"
+              />
+              <button className="refresh-small-btn" onClick={() => fetchTableData(tableName, startTime, endTime)}>
+                筛选/刷新
+              </button>
+            </div>
             <button className="close-small-btn" onClick={() => handleTableClick(tableName)}>收起</button>
           </div>
         </div>
@@ -218,27 +280,6 @@ function App() {
           </div>
         ) : tableData.length > 0 ? (
           <>
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {Object.keys(tableData[0]).map(key => (
-                      <th key={key}>{key}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {tableData.map((row, i) => (
-                    <tr key={i}>
-                      {Object.values(row).map((val: any, j) => (
-                        <td key={j}>{typeof val === 'object' ? JSON.stringify(val) : String(val)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
             {locationData.length > 0 && (
               <div className="map-section">
                 <h3>地理位置分布 ({tableName})</h3>
@@ -264,80 +305,152 @@ function App() {
                             // @ts-ignore
                             position={[pos.displayLng, pos.displayLat]} 
                             title={`Point ${idx + 1}`}
+                            onClick={() => {
+                              setActiveMarkerMap(prev => ({ ...prev, [tableName]: pos }));
+                            }}
                           />
                         ))}
+                        {activeMarkerMap[tableName] && (
+                          <InfoWindow
+                            // @ts-ignore
+                            position={[activeMarkerMap[tableName].displayLng, activeMarkerMap[tableName].displayLat]}
+                            visible={true}
+                            onClose={() => {
+                              setActiveMarkerMap(prev => {
+                                const next = { ...prev };
+                                delete next[tableName];
+                                return next;
+                              });
+                            }}
+                          >
+                            <div className="info-window-card">
+                              <h4 className="info-window-title">设备位置详情</h4>
+                              <div className="info-window-body">
+                                {['timestamp', 'latitude', 'longitude', 'provider', 'device_id', 'device_name', 'battery_level'].map(field => {
+                                  if (activeMarkerMap[tableName][field] !== undefined && activeMarkerMap[tableName][field] !== null) {
+                                    return (
+                                      <div className="info-row" key={field}>
+                                        <span className="info-label">{field}</span>
+                                        <span className="info-value">{String(activeMarkerMap[tableName][field])}</span>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </div>
+                            </div>
+                          </InfoWindow>
+                        )}
                       </Map>
                     </APILoader>
                   </div>
                 )}
               </div>
             )}
+
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {Object.keys(tableData[0]).map(key => (
+                      <th key={key}>{key}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val: any, j) => (
+                        <td key={j}>{typeof val === 'object' ? JSON.stringify(val) : String(val)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         ) : (
-          <p className="empty">表内暂无数据。</p>
+          <p className="empty">表内暂无数据 (或当前时间范围内无数据)。</p>
         )}
       </div>
     );
   }
 
   return (
-    <div className="container">
-      <h1>AppTrackView</h1>
-      <p className="url-tag">Connected: {import.meta.env.VITE_SUPABASE_URL}</p>
-
-      {error && (
-        <div className="error-box">
-          <p>⚠️ {error}</p>
+    <div className="app-layout">
+      {/* 侧边栏 */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <h1>AppTrackView</h1>
+          <p className="url-tag" title={import.meta.env.VITE_SUPABASE_URL}>
+            {import.meta.env.VITE_SUPABASE_URL?.replace('https://', '')}
+          </p>
         </div>
-      )}
 
-      <div className="manual-check card">
-        <h3>手动校验表</h3>
-        <div className="input-row">
-          <input 
-            type="text" 
-            placeholder="输入表名..." 
-            value={manualTableName}
-            onChange={(e) => setManualTableName(e.target.value)}
-          />
-          <button onClick={checkManualTable}>检查</button>
-        </div>
-        {manualCheckResult && <p className="result-msg">{manualCheckResult}</p>}
-      </div>
-
-      <div className="table-list card">
-        <div className="list-header">
-          <h2>探测到的表 ({tables.length})</h2>
-          <div className="list-actions">
-            <button className="action-btn small" onClick={handleExpandAll} disabled={tables.length === 0}>全部展开</button>
-            <button className="action-btn small" onClick={handleCollapseAll} disabled={expandedTables.length === 0}>全部收起</button>
-            <button className="refresh-icon-btn" onClick={fetchTables} title="刷新列表">🔄</button>
+        <div className="sidebar-section">
+          <div className="list-header">
+            <h2>数据库表 ({tables.length})</h2>
+            <div className="list-actions">
+              <button className="action-btn small" onClick={handleExpandAll} disabled={tables.length === 0}>全选</button>
+              <button className="action-btn small" onClick={handleCollapseAll} disabled={expandedTables.length === 0}>收起</button>
+              <button className="refresh-icon-btn" onClick={fetchTables} title="刷新列表">🔄</button>
+            </div>
           </div>
+          
+          {loading ? (
+            <p className="loading">正在扫描...</p>
+          ) : tables.length > 0 ? (
+            <div className="table-list-vertical">
+              {tables.map(table => (
+                <div 
+                  key={table} 
+                  className={`table-item ${expandedTables.includes(table) ? 'selected' : ''}`}
+                  onClick={() => handleTableClick(table)}
+                >
+                  <span className="icon">📊</span>
+                  <span className="name">{table}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            !error && <p className="empty">未找到表。</p>
+          )}
         </div>
-        
-        {loading ? (
-          <p className="loading">正在扫描数据库...</p>
-        ) : tables.length > 0 ? (
-          <div className="table-grid">
-            {tables.map(table => (
-              <div 
-                key={table} 
-                className={`table-item ${expandedTables.includes(table) ? 'selected' : ''}`}
-                onClick={() => handleTableClick(table)}
-              >
-                <span className="icon">📊</span>
-                <span className="name">{table}</span>
-              </div>
-            ))}
+
+        <div className="sidebar-section manual-check-section">
+          <h3>找不到表？</h3>
+          <div className="input-row">
+            <input 
+              type="text" 
+              placeholder="手动输入表名..." 
+              value={manualTableName}
+              onChange={(e) => setManualTableName(e.target.value)}
+            />
+            <button onClick={checkManualTable}>检查</button>
           </div>
-        ) : (
-          !error && <p className="empty">未找到任何公开定义的表。</p>
+          {manualCheckResult && <p className="result-msg">{manualCheckResult}</p>}
+        </div>
+      </aside>
+
+      {/* 主内容区 */}
+      <main className="main-content">
+        {error && (
+          <div className="error-box global-error">
+            <p>⚠️ {error}</p>
+          </div>
         )}
-      </div>
 
-      <div className="multi-data-container">
-        {expandedTables.map(tableName => renderDataPanel(tableName))}
-      </div>
+        <div className="multi-data-container">
+          {expandedTables.length === 0 ? (
+            <div className="welcome-placeholder">
+              <span className="welcome-icon">👈</span>
+              <h2>请在左侧选择要查看的表</h2>
+            </div>
+          ) : (
+            expandedTables.map(tableName => renderDataPanel(tableName))
+          )}
+        </div>
+      </main>
     </div>
   )
 }
