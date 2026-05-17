@@ -172,26 +172,13 @@ function App() {
 
   const handleTableClick = (tableName: string) => {
     if (expandedTables.includes(tableName)) {
-      setExpandedTables(prev => prev.filter(t => t !== tableName))
+      setExpandedTables([])
     } else {
-      setExpandedTables(prev => [...prev, tableName])
+      setExpandedTables([tableName])
       if (!tableDataMap[tableName]) {
         fetchTableData(tableName)
       }
     }
-  }
-
-  const handleExpandAll = () => {
-    setExpandedTables([...tables])
-    tables.forEach(tableName => {
-      if (!tableDataMap[tableName]) {
-        fetchTableData(tableName)
-      }
-    })
-  }
-
-  const handleCollapseAll = () => {
-    setExpandedTables([])
   }
 
   const checkManualTable = async () => {
@@ -391,8 +378,6 @@ function App() {
           <div className="list-header">
             <h2>数据库表 ({tables.length})</h2>
             <div className="list-actions">
-              <button className="action-btn small" onClick={handleExpandAll} disabled={tables.length === 0}>全选</button>
-              <button className="action-btn small" onClick={handleCollapseAll} disabled={expandedTables.length === 0}>收起</button>
               <button className="refresh-icon-btn" onClick={fetchTables} title="刷新列表">🔄</button>
             </div>
           </div>
