@@ -27,6 +27,43 @@ const theme = createTheme({
   shape: { borderRadius: 12 }
 });
 
+const TABLE_NAME_MAP: Record<string, string> = {
+  'locations': '位置记录',
+  'notification_history': '通知历史',
+  'app_info_stats': '应用统计',
+  'call_history': '通话记录',
+  'sms_history': '短信记录',
+  'app_session_history': '应用使用记录'
+};
+
+const COLUMN_NAME_MAP: Record<string, string> = {
+  'id': 'ID',
+  'timestamp': '时间戳',
+  'latitude': '纬度',
+  'longitude': '经度',
+  'provider': '提供者',
+  'device_id': '设备ID',
+  'device_name': '设备名称',
+  'battery_level': '电量',
+  'satellite_count': '卫星数',
+  'beidou_count': '北斗卫星',
+  'gps_count': 'GPS卫星',
+  'package_name': '包名',
+  'app_name': '应用名',
+  'title': '标题',
+  'content': '内容',
+  'time': '时间',
+  'created_at': '创建时间',
+  'phone_number': '手机号',
+  'duration': '时长',
+  'type': '类型',
+  'address': '地址',
+  'date': '日期',
+  'usage_time': '使用时长',
+  'last_time_used': '上次使用时间',
+  'total_time_visible': '总前台时长'
+};
+
 interface TableDataState {
   data: any[];
   error: string | null;
@@ -55,6 +92,9 @@ function App() {
   const [activeMarkerMap, setActiveMarkerMap] = useState<Record<string, any>>({})
 
   useEffect(() => { fetchTables() }, [])
+
+  const translateTable = (name: string) => TABLE_NAME_MAP[name] || name;
+  const translateColumn = (name: string) => COLUMN_NAME_MAP[name] || name;
 
   const fetchTables = async () => {
     try {
@@ -185,7 +225,7 @@ function App() {
       <Paper elevation={2} sx={{ p: 3, mb: 4, borderRadius: 2 }} key={tableName}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h5" color="primary" sx={{ fontWeight: 600 }}>{tableName} ({tableData.length} 条)</Typography>
+            <Typography variant="h5" color="primary" sx={{ fontWeight: 600 }}>{translateTable(tableName)} ({tableData.length} 条)</Typography>
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => fetchTableData(tableName)}>刷新数据</Button>
           </Box>
           {tableName === 'locations' && (
@@ -214,18 +254,43 @@ function App() {
                 {activeMarkerMap[tableName] && (<InfoWindow // @ts-ignore
                     position={[activeMarkerMap[tableName].displayLng, activeMarkerMap[tableName].displayLat]} visible={true} offset={[25, -35]}
                     onClose={() => setActiveMarkerMap(prev => { const next = { ...prev }; delete next[tableName]; return next; })}>
-                    <div className="info-window-card"><div className="info-window-body">
+                    <div className="info-window-card">
+                      <div className="info-window-body">
                         {Object.entries(activeMarkerMap[tableName]).map(([key, val]) => {
                           if (key === 'displayLng' || key === 'displayLat') return null;
-                          return val !== undefined && val !== null ? (<div className="info-row" key={key}><span className="info-label">{key}</span><span className="info-value">{String(val)}</span></div>) : null;
-                        })}</div></div></InfoWindow>)}</Map></APILoader>
-          </Box>
-        )}
-        <TableContainer component={Paper} sx={{ maxHeight: 450, overflowX: 'auto', maxWidth: '100%' }}>
-          <Table stickyHeader size="small"><TableHead><TableRow>{tableData.length > 0 && Object.keys(tableData[0]).map(k => (
-                  <TableCell key={k} sx={{ bgcolor: '#f5f5f5', fontWeight: 600 }}>
-                    <TableSortLabel active={orderBy === k} direction={orderBy === k ? order : 'asc'} onClick={() => handleRequestSort(k)}>{k}</TableSortLabel>
-                  </TableCell>))}</TableRow></TableHead>
+                          return val !== undefined && val !== null ? (
+                            <div className="info-row" key={key}>
+                              <span className="info-label">{translateColumn(key)}</span>
+                              <span className="info-value">{String(val)}</span>
+                            </div>
+                          ) : null;
+                        })}
+                      </div>
+                    </div>
+                    </InfoWindow>
+                    )}
+                    </Map>
+                    </APILoader>
+                    </Box>
+                    )}
+
+                    <TableContainer component={Paper} sx={{ maxHeight: 450, overflowX: 'auto', maxWidth: '100%' }}>
+                    <Table stickyHeader size="small">
+                    <TableHead>
+                    <TableRow>
+                    {tableData.length > 0 && Object.keys(tableData[0]).map(k => (
+                    <TableCell key={k} sx={{ bgcolor: '#f5f5f5', fontWeight: 600 }}>
+                    <TableSortLabel
+                      active={orderBy === k}
+                      direction={orderBy === k ? order : 'asc'}
+                      onClick={() => handleRequestSort(k)}
+                    >
+                      {translateColumn(k)}
+                    </TableSortLabel>
+                    </TableCell>
+                    ))}
+                    </TableRow>
+                    </TableHead>
             <TableBody>{sortedData.map((row: any, i: number) => (<TableRow key={i} hover>{Object.values(row).map((v: any, j: number) => <TableCell key={j}>{String(v)}</TableCell>)}</TableRow>))}</TableBody>
           </Table></TableContainer>
       </Paper>
@@ -237,7 +302,7 @@ function App() {
       <Box sx={{ display: 'flex', bgcolor: '#f1f5f9', minHeight: '100vh' }}>
         <CssBaseline />
         <AppBar position="fixed" sx={{ zIndex: (theme: any) => theme.zIndex.drawer + 1, bgcolor: '#fff', color: '#1e293b', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-          <Toolbar><Typography variant="h6" sx={{ fontWeight: 700 }}>Data Explorer</Typography></Toolbar>
+          <Toolbar><Typography variant="h6" sx={{ fontWeight: 700 }}>应用追踪视图</Typography></Toolbar>
         </AppBar>
         <Drawer variant="permanent" sx={{ width: DRAWER_WIDTH, flexShrink: 0, '& .MuiDrawer-paper': { width: DRAWER_WIDTH, border: 'none', bgcolor: '#fff' } }}>
           <Toolbar />
@@ -245,10 +310,9 @@ function App() {
               <ListItem key={t} disablePadding sx={{ mb: 1 }}>
                 <ListItemButton onClick={() => handleTableClick(t)} selected={expandedTables.includes(t)} sx={{ borderRadius: 2, '&.Mui-selected': { bgcolor: '#eff6ff', color: '#2563eb' } }}>
                   <ListItemIcon sx={{ color: 'inherit' }}><TableChartIcon /></ListItemIcon>
-                  <ListItemText primary={t} />
+                  <ListItemText primary={translateTable(t)} />
                 </ListItemButton></ListItem>))}</List>
-        </Drawer>
-        <Box component="main" className="main-content" sx={{ flexGrow: 1, p: 4, display: 'flex', flexDirection: 'column', height: '100vh', minWidth: 0 }}>
+        </Drawer>        <Box component="main" className="main-content" sx={{ flexGrow: 1, p: 4, display: 'flex', flexDirection: 'column', height: '100vh', minWidth: 0 }}>
           <Toolbar />
           <Box sx={{ width: '100%', flex: 1, overflow: 'auto', pb: 4, minWidth: 0 }}>
             {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
