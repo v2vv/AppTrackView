@@ -8,6 +8,7 @@
   --error-bg: #fff1f2;
   --error-border: #fda4af;
   --error-text: #9f1239;
+  --border: #e5e7eb;
 }
 
 body {
@@ -18,7 +19,7 @@ body {
 }
 
 .container {
-  max-width: 800px;
+  max-width: 1000px;
   margin: 0 auto;
   padding: 40px 20px;
 }
@@ -56,20 +57,18 @@ h1 {
   margin-bottom: 2rem;
 }
 
-.sql-helper {
-  font-size: 0.85rem;
-  margin-top: 12px;
-  border-top: 1px dashed var(--error-border);
-  padding-top: 12px;
+.error-small {
+  color: var(--error-text);
+  font-size: 0.9rem;
+  padding: 12px;
+  background: var(--error-bg);
+  border-radius: 8px;
 }
 
-pre {
-  background: #111827;
-  color: #ecfdf5;
-  padding: 16px;
-  border-radius: 8px;
-  overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+.help-text {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 4px;
 }
 
 .input-row {
@@ -94,40 +93,17 @@ button {
   border-radius: 8px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 button:hover {
   background: var(--primary-hover);
-}
-
-.result-msg {
-  font-size: 0.9rem;
-  margin-top: 8px;
-  color: var(--primary);
-}
-
-.list-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-
-.refresh-icon-btn {
-  background: transparent;
-  padding: 4px;
-  font-size: 1.2rem;
-  color: var(--text-muted);
-}
-
-.refresh-icon-btn:hover {
-  background: #f3f4f6;
+  transform: translateY(-1px);
 }
 
 .table-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -138,18 +114,143 @@ button:hover {
   padding: 12px;
   background: #f9fafb;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.table-item .icon {
-  font-size: 1.2rem;
+.table-item:hover {
+  border-color: var(--primary);
+  background: #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 
-.table-item .name {
-  font-weight: 500;
+.table-item.selected {
+  border-color: var(--primary);
+  background: rgba(62, 207, 142, 0.1);
+  box-shadow: 0 0 0 2px rgba(62, 207, 142, 0.2);
 }
 
-.loading, .empty, .hint {
-  color: var(--text-muted);
+.data-panel {
+  border-top: 4px solid var(--primary);
+}
+
+.data-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.table-name-code {
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: var(--primary);
+}
+
+.refresh-small-btn {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  background: #f3f4f6;
+  color: var(--text-main);
+}
+
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.action-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  background: var(--bg);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+}
+
+.action-btn:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.data-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.close-small-btn {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.close-small-btn:hover {
+  background: #fda4af;
+  color: white;
+}
+
+.map-container {
+  height: 400px;
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.multi-data-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.data-table th {
+  background: #f9fafb;
+  padding: 12px;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-table tr:hover {
+  background: #f9fafb;
+}
+
+.loading, .empty {
   text-align: center;
+  padding: 2rem;
+  color: var(--text-muted);
+}
+
+.map-section {
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 2px dashed var(--border);
+}
+
+.map-section h3 {
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+  color: var(--text-main);
 }

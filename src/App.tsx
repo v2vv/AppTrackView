@@ -1,6 +1,21 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './utils/supabase'
+import { APILoader, Map, Marker } from '@uiw/react-amap'
+import { wgs84ToGcj02 } from './utils/coordTransform'
 import './App.css'
+
+// 配置高德地图安全密钥
+if (typeof window !== 'undefined') {
+  (window as any)._AMapSecurityConfig = {
+    securityJsCode: import.meta.env.VITE_AMAP_SECURITY_CODE,
+  };
+}
+
+interface TableDataState {
+  data: any[];
+  loading: boolean;
+  error: string | null;
+}
 
 function App() {
   const [tables, setTables] = useState<string[]>([])
@@ -8,6 +23,11 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [manualTableName, setManualTableName] = useState('')
   const [manualCheckResult, setManualCheckResult] = useState<string | null>(null)
+
+  // 展开的表列表
+  const [expandedTables, setExpandedTables] = useState<string[]>([])
+  // 数据缓存图
+  const [tableDataMap, setTableDataMap] = useState<Record<string, TableDataState>>({})
 
   useEffect(() => {
     fetchTables()
@@ -29,7 +49,6 @@ function App() {
 
       const tableNamesSet = new Set<string>()
 
-      // 探测方法 1: 增强的 OpenAPI 扫描 (Definitions + Paths)
       try {
         const restUrl = `${url.replace(/\/$/, '')}/rest/v1/`
         const response = await fetch(restUrl, {
@@ -41,13 +60,9 @@ function App() {
         
         if (response.ok) {
           const data = await response.json()
-          
-          // 检查 definitions (Swagger 结构)
           if (data.definitions) {
             Object.keys(data.definitions).forEach(name => tableNamesSet.add(name))
           }
-          
-          // 检查 paths (有时 definitions 为空，但路径中存在表名)
           if (data.paths) {
             Object.keys(data.paths).forEach(path => {
               const cleanPath = path.replace(/^\//, '').split('?')[0]
@@ -61,7 +76,6 @@ function App() {
         console.error('OpenAPI detection failed', e)
       }
 
-      // 探测方法 2: RPC 备选 (如果用户运行了之前建议的 SQL 函数)
       if (tableNamesSet.size === 0) {
         try {
           const { data: rpcData } = await supabase.rpc('get_tables')
@@ -86,6 +100,61 @@ function App() {
     }
   }
 
+  const fetchTableData = async (tableName: string) => {
+    // 设置该表为加载中
+    setTableDataMap(prev => ({
+      ...prev,
+      [tableName]: { ...(prev[tableName] || { data: [] }), loading: true, error: null }
+    }))
+    
+    try {
+      const { data, error: fetchError } = await supabase
+        .from(tableName)
+        .select('*')
+      
+      if (fetchError) {
+        setTableDataMap(prev => ({
+          ...prev,
+          [tableName]: { data: [], loading: false, error: fetchError.message }
+        }))
+      } else {
+        setTableDataMap(prev => ({
+          ...prev,
+          [tableName]: { data: data || [], loading: false, error: null }
+        }))
+      }
+    } catch (err: any) {
+      setTableDataMap(prev => ({
+        ...prev,
+        [tableName]: { data: [], loading: false, error: err.message }
+      }))
+    }
+  }
+
+  const handleTableClick = (tableName: string) => {
+    if (expandedTables.includes(tableName)) {
+      setExpandedTables(prev => prev.filter(t => t !== tableName))
+    } else {
+      setExpandedTables(prev => [...prev, tableName])
+      if (!tableDataMap[tableName]) {
+        fetchTableData(tableName)
+      }
+    }
+  }
+
+  const handleExpandAll = () => {
+    setExpandedTables([...tables])
+    tables.forEach(tableName => {
+      if (!tableDataMap[tableName]) {
+        fetchTableData(tableName)
+      }
+    })
+  }
+
+  const handleCollapseAll = () => {
+    setExpandedTables([])
+  }
+
   const checkManualTable = async () => {
     if (!manualTableName) return
     setManualCheckResult('正在检查...')
@@ -105,6 +174,112 @@ function App() {
     }
   }
 
+  const amapKey = import.meta.env.VITE_AMAP_KEY;
+
+  const renderDataPanel = (tableName: string) => {
+    const state = tableDataMap[tableName] || { data: [], loading: true, error: null };
+    const { data: tableData, loading: dataLoading, error: dataError } = state;
+
+    // 检查并转换坐标数据
+    const locationData = tableData
+      .filter(row => 
+        row.latitude !== undefined && 
+        row.longitude !== undefined && 
+        !isNaN(parseFloat(row.latitude)) && 
+        !isNaN(parseFloat(row.longitude))
+      )
+      .map(row => {
+        const lng = parseFloat(row.longitude);
+        const lat = parseFloat(row.latitude);
+        // 执行 WGS-84 到 GCJ-02 的转换
+        const [gcjLng, gcjLat] = wgs84ToGcj02(lng, lat);
+        return {
+          ...row,
+          displayLng: gcjLng,
+          displayLat: gcjLat
+        };
+      });
+
+    return (
+      <div className="data-panel card" key={tableName}>
+        <div className="data-header">
+          <h3>数据预览: <code className="table-name-code">{tableName}</code></h3>
+          <div className="data-header-actions">
+            <button className="refresh-small-btn" onClick={() => fetchTableData(tableName)}>刷新</button>
+            <button className="close-small-btn" onClick={() => handleTableClick(tableName)}>收起</button>
+          </div>
+        </div>
+
+        {dataLoading ? (
+          <p className="loading">正在获取数据...</p>
+        ) : dataError ? (
+          <div className="error-small">
+            <p>⚠️ 无法加载数据: {dataError}</p>
+          </div>
+        ) : tableData.length > 0 ? (
+          <>
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {Object.keys(tableData[0]).map(key => (
+                      <th key={key}>{key}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val: any, j) => (
+                        <td key={j}>{typeof val === 'object' ? JSON.stringify(val) : String(val)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {locationData.length > 0 && (
+              <div className="map-section">
+                <h3>地理位置分布 ({tableName})</h3>
+                <p className="hint" style={{ fontSize: '0.8rem', textAlign: 'left', marginBottom: '8px' }}>
+                  💡 坐标已自动从 WGS-84 转换为火星坐标系 (GCJ-02) 以适配高德地图。
+                </p>
+                {!amapKey ? (
+                  <div className="error-small">
+                    <p>💡 检测到经纬度数据，但未配置高德地图 API Key。</p>
+                  </div>
+                ) : (
+                  <div className="map-container">
+                    <APILoader akey={amapKey}>
+                      <Map 
+                        // @ts-ignore
+                        center={[locationData[0].displayLng, locationData[0].displayLat]}
+                        // @ts-ignore
+                        zoom={10}
+                      >
+                        {locationData.map((pos, idx) => (
+                          <Marker 
+                            key={idx} 
+                            // @ts-ignore
+                            position={[pos.displayLng, pos.displayLat]} 
+                            title={`Point ${idx + 1}`}
+                          />
+                        ))}
+                      </Map>
+                    </APILoader>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="empty">表内暂无数据。</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="container">
       <h1>AppTrackView</h1>
@@ -113,32 +288,11 @@ function App() {
       {error && (
         <div className="error-box">
           <p>⚠️ {error}</p>
-          <div className="sql-helper">
-            <p><b>为什么看不到表？</b></p>
-            <ul>
-              <li>您的表可能没有开启 <b>RLS (Row Level Security)</b> 且没有 <code>SELECT</code> 权限给 <code>anon</code> 角色。</li>
-              <li>您可以尝试在 Supabase SQL Editor 中运行以下代码来启用自动列出功能：</li>
-            </ul>
-            <pre>
-{`CREATE OR REPLACE FUNCTION get_tables()
-RETURNS TABLE (table_name text) 
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  RETURN QUERY SELECT tablename::text 
-  FROM pg_tables 
-  WHERE schemaname = 'public';
-END;
-$$;`}
-            </pre>
-          </div>
         </div>
       )}
 
       <div className="manual-check card">
         <h3>手动校验表</h3>
-        <p className="hint">如果自动探测不到，请输入表名（如 <code>todos</code>）直接尝试访问：</p>
         <div className="input-row">
           <input 
             type="text" 
@@ -154,7 +308,11 @@ $$;`}
       <div className="table-list card">
         <div className="list-header">
           <h2>探测到的表 ({tables.length})</h2>
-          <button className="refresh-icon-btn" onClick={fetchTables} title="刷新">🔄</button>
+          <div className="list-actions">
+            <button className="action-btn small" onClick={handleExpandAll} disabled={tables.length === 0}>全部展开</button>
+            <button className="action-btn small" onClick={handleCollapseAll} disabled={expandedTables.length === 0}>全部收起</button>
+            <button className="refresh-icon-btn" onClick={fetchTables} title="刷新列表">🔄</button>
+          </div>
         </div>
         
         {loading ? (
@@ -162,7 +320,11 @@ $$;`}
         ) : tables.length > 0 ? (
           <div className="table-grid">
             {tables.map(table => (
-              <div key={table} className="table-item">
+              <div 
+                key={table} 
+                className={`table-item ${expandedTables.includes(table) ? 'selected' : ''}`}
+                onClick={() => handleTableClick(table)}
+              >
                 <span className="icon">📊</span>
                 <span className="name">{table}</span>
               </div>
@@ -171,6 +333,10 @@ $$;`}
         ) : (
           !error && <p className="empty">未找到任何公开定义的表。</p>
         )}
+      </div>
+
+      <div className="multi-data-container">
+        {expandedTables.map(tableName => renderDataPanel(tableName))}
       </div>
     </div>
   )
