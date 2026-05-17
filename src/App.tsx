@@ -2,10 +2,6 @@ import { useState } from 'react'
 import { getSupabase } from './supabaseClient'
 import './App.css'
 
-interface TableInfo {
-  table_name: string;
-}
-
 function App() {
   const [url, setUrl] = useState('')
   const [key, setKey] = useState('')
@@ -24,47 +20,46 @@ function App() {
     setTables([])
 
     try {
-      const supabase = getSupabase(url, key)
-      
-      // 注意：Supabase JS 客户端没有直接列出所有表的标准 API。
-      // 这里我们尝试通过查询 postgrest 的信息来获取表列表。
-      // 另一种方法是使用 RPC 调用或直接尝试从常用表中读取，但为了通用性，
-      // 我们尝试查询 information_schema (这通常需要更高的权限，但在某些配置下可用)。
-      // 对于一般的 Anon Key，我们可以尝试获取 API 定义。
-      
-      const { data, error: fetchError } = await supabase
-        .from('pg_tables') // 这是一个假设，通常 information_schema.tables 更标准
-        .select('tablename')
-        .filter('schemaname', 'eq', 'public')
-
-      if (fetchError) {
-        // 如果直接查询 pg_tables 失败（通常会失败，权限限制），
-        // 我们可以告知用户。在 Supabase 中展示所有表通常需要设置 RPC。
-        console.error('Fetch error:', fetchError)
-        
-        // 备选方案：告诉用户如何通过 RPC 实现
-        setError(`无法直接列出表。请确保您在 Supabase SQL Editor 中运行了以下函数：
-        CREATE OR REPLACE FUNCTION get_tables()
-        RETURNS TABLE (table_name text) 
-        LANGUAGE plpgsql
-        SECURITY DEFINER
-        AS $$
-        BEGIN
-          RETURN QUERY SELECT tablename::text FROM pg_tables WHERE schemaname = 'public';
-        END;
-        $$;`)
-        
-        // 尝试使用 RPC 如果已存在
-        const { data: rpcData, error: rpcError } = await supabase.rpc('get_tables')
-        if (!rpcError && rpcData) {
-           setTables(rpcData.map((t: any) => t.table_name))
-           setError(null)
+      // 方法 1: 尝试通过 Postgrest 的根路径获取 OpenAPI 定义
+      // 这通常包含了所有的公开表名，且 Anon Key 即可访问
+      const restUrl = `${url.replace(/\/$/, '')}/rest/v1/`
+      const response = await fetch(restUrl, {
+        headers: {
+          'apikey': key,
+          'Authorization': `Bearer ${key}`
         }
-      } else if (data) {
-        setTables(data.map((t: any) => t.tablename))
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.definitions) {
+          const tableNames = Object.keys(data.definitions)
+          setTables(tableNames)
+          return
+        }
+      }
+
+      // 方法 2: 如果方法 1 失败（例如 CORS 或自定义路径），尝试使用 RPC (之前的备选方案)
+      const supabase = getSupabase(url, key)
+      const { data: rpcData, error: rpcError } = await supabase.rpc('get_tables')
+      
+      if (!rpcError && rpcData) {
+        setTables(rpcData.map((t: any) => t.table_name || t.tablename))
+      } else {
+        setError(`无法自动获取表。如果您的数据库有表但未显示，请在 Supabase SQL Editor 中运行以下函数以启用 RPC 获取：
+
+CREATE OR REPLACE FUNCTION get_tables()
+RETURNS TABLE (table_name text) 
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY SELECT tablename::text FROM pg_tables WHERE schemaname = 'public';
+END;
+$$;`)
       }
     } catch (err: any) {
-      setError(err.message || '连接失败')
+      setError(`连接错误: ${err.message}`)
     } finally {
       setLoading(false)
     }
@@ -107,7 +102,7 @@ function App() {
             ))}
           </ul>
         ) : (
-          !loading && <p>暂无数据</p>
+          !loading && <p>暂无数据 (或未找到公开表)</p>
         )}
       </div>
     </div>
