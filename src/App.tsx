@@ -6,7 +6,7 @@ import {
   Box, CssBaseline, Drawer, Toolbar, Typography, List, ListItem, 
   ListItemButton, ListItemText, Button, 
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, 
-  Paper, Alert, AppBar, ListItemIcon, TextField, MenuItem
+  Paper, Alert, AppBar, ListItemIcon, TextField, MenuItem, TableSortLabel
 } from '@mui/material'
 import TableChartIcon from '@mui/icons-material/TableChart'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -40,9 +40,12 @@ interface TableDataState {
   availableMonths?: string[];
   availableDays?: string[];
   availableProviders?: string[];
+  orderBy?: string;
+  order?: 'asc' | 'desc';
 }
 
 const DRAWER_WIDTH = 280;
+const PAGE_SIZE = 1000;
 
 function App() {
   const [tables, setTables] = useState<string[]>([])
@@ -73,61 +76,71 @@ function App() {
     const currentState = tableDataMap[tableName] || { data: [] };
     const nextState = { ...currentState, ...customUpdates };
     
-    // 立即更新加载状态
-    setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, error: null } }));
+    setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, data: nextState.data || [], error: null } }));
 
     try {
-      // 只有 locations 表需要复杂的过滤逻辑
-      if (tableName === 'locations') {
-          let query = supabase.from(tableName).select('*');
+      let allData: any[] = [];
+      let page = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        let query = supabase.from(tableName).select('*');
+        
+        // 仅 locations 表应用时间筛选
+        if (tableName === 'locations') {
           const startTimeStr = getFullTimestamp(nextState, nextState.startTime || '00:00:00');
           const endTimeStr = getFullTimestamp(nextState, nextState.endTime || '23:59:59');
-
           if (startTimeStr) query = query.gte('timestamp', startTimeStr);
           if (endTimeStr) query = query.lte('timestamp', endTimeStr);
           if (nextState.filterProvider) query = query.eq('provider', nextState.filterProvider);
-          
-          const { data, error: fetchError } = await query;
-          
-          let extraUpdates: any = {};
-          // 如果是第一次进入 locations 表，获取所有元数据以填充筛选列表
-          if (!currentState.availableYears) {
-              const { data: allMeta } = await supabase.from(tableName).select('timestamp, provider');
-              if (allMeta) {
-                  const validMeta = allMeta.filter((r: any) => {
-                      const d = dayjs(String(r.timestamp), ['YYYY-MM-DD HH:mm:ss', 'HH:mm:ss', 'YYYY-MM-DD'], true);
-                      return d.isValid();
-                  });
-                  const tsList = validMeta.map((r: any) => r.timestamp).filter(Boolean);
-                  extraUpdates.availableYears = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[0] : ''))).filter(Boolean).sort();
-                  extraUpdates.availableMonths = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[1] : ''))).filter(Boolean).sort();
-                  extraUpdates.availableDays = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[2]?.split(' ')[0] : ''))).filter(Boolean).sort();
-                  extraUpdates.availableProviders = Array.from(new Set(validMeta.map((r: any) => r.provider))).filter(Boolean).sort();
+        }
 
-                  if (!nextState.filterYear) {
-                      const sorted = validMeta.sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
-                      const latestTs = String(sorted[0].timestamp || '');
-                      if (latestTs.includes('-')) {
-                         const [y, m, d] = latestTs.split(/[- :]/);
-                         extraUpdates.filterYear = y; extraUpdates.filterMonth = m; extraUpdates.filterDay = d;
-                         extraUpdates.startTime = '00:00:00'; extraUpdates.endTime = '23:59:59';
-                         
-                         // 重新获取选中日期的数据
-                         const finalStart = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} 00:00:00`;
-                         const finalEnd = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} 23:59:59`;
-                         const { data: initialData } = await supabase.from(tableName).select('*').gte('timestamp', finalStart).lte('timestamp', finalEnd);
-                         setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, ...extraUpdates, data: initialData || [], error: null } }));
-                         return;
-                      }
+        const { data, error: fetchError } = await query.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+        
+        if (fetchError) throw fetchError;
+        if (!data || data.length === 0) {
+          hasMore = false;
+        } else {
+          allData = [...allData, ...data];
+          if (data.length < PAGE_SIZE) hasMore = false;
+          else page++;
+        }
+        
+        // 限制最大拉取量，防止死循环或浏览器崩溃
+        if (allData.length >= 20000) hasMore = false;
+      }
+      
+      let extraUpdates: any = {};
+      if (tableName === 'locations' && !currentState.availableYears) {
+          // 获取元数据（用于填充筛选列表）
+          const { data: allMeta } = await supabase.from(tableName).select('timestamp, provider').order('timestamp', { ascending: false }).limit(5000);
+          if (allMeta) {
+              const validMeta = allMeta.filter((r: any) => {
+                  const d = dayjs(String(r.timestamp), ['YYYY-MM-DD HH:mm:ss', 'HH:mm:ss', 'YYYY-MM-DD'], true);
+                  return d.isValid();
+              });
+              const tsList = validMeta.map((r: any) => r.timestamp).filter(Boolean);
+              extraUpdates.availableYears = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[0] : ''))).filter(Boolean).sort();
+              extraUpdates.availableMonths = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[1] : ''))).filter(Boolean).sort();
+              extraUpdates.availableDays = Array.from(new Set(tsList.map((ts: string) => ts.includes('-') ? ts.split('-')[2]?.split(' ')[0] : ''))).filter(Boolean).sort();
+              extraUpdates.availableProviders = Array.from(new Set(validMeta.map((r: any) => r.provider))).filter(Boolean).sort();
+
+              if (!nextState.filterYear) {
+                  const sorted = validMeta.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+                  const latestTs = String(sorted[0].timestamp || '');
+                  if (latestTs.includes('-')) {
+                     const [y, m, d] = latestTs.split(/[- :]/);
+                     extraUpdates.filterYear = y; extraUpdates.filterMonth = m; extraUpdates.filterDay = d;
+                     extraUpdates.startTime = '00:00:00'; extraUpdates.endTime = '23:59:59';
+                     // 递归获取一次初始数据
+                     fetchTableData(tableName, extraUpdates);
+                     return;
                   }
               }
           }
-          setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, ...extraUpdates, data: data || [], error: fetchError?.message || null } }));
-      } else {
-          // 其他表执行简单查询
-          const { data, error: fetchError } = await supabase.from(tableName).select('*');
-          setTableDataMap(prev => ({ ...prev, [tableName]: { data: data || [], error: fetchError?.message || null } }));
       }
+
+      setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, ...extraUpdates, data: allData, error: null } }));
     } catch (err: any) {
       setTableDataMap(prev => ({ ...prev, [tableName]: { ...nextState, data: [], error: err.message } }))
     }
@@ -143,20 +156,25 @@ function App() {
   const renderDataPanel = (tableName: string) => {
     const state = tableDataMap[tableName] || { data: [], error: null, startTime: '00:00:00', endTime: '23:59:59' };
     const { 
-        data: tableData = [], 
-        startTime, 
-        endTime, 
-        filterYear, 
-        filterMonth, 
-        filterDay, 
-        filterProvider, 
-        availableYears = [], 
-        availableMonths = [], 
-        availableDays = [], 
-        availableProviders = [] 
+        data: tableData = [], startTime, endTime, filterYear, filterMonth, filterDay, filterProvider, 
+        availableYears = [], availableMonths = [], availableDays = [], availableProviders = [],
+        orderBy, order = 'asc'
     } = state;
 
-    const locationData = tableData
+    const sortedData = (() => {
+        if (!orderBy) return tableData;
+        return [...tableData].sort((a, b) => {
+            const valA = String(a[orderBy] || ''); const valB = String(b[orderBy] || '');
+            return order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        });
+    })();
+
+    const handleRequestSort = (property: string) => {
+        const isAsc = orderBy === property && order === 'asc';
+        setTableDataMap(prev => ({ ...prev, [tableName]: { ...state, order: isAsc ? 'desc' : 'asc', orderBy: property } }));
+    };
+
+    const locationData = sortedData
       .filter((row: any) => row.latitude && row.longitude)
       .map((row: any) => {
         const [gcjLng, gcjLat] = wgs84ToGcj02(parseFloat(row.longitude), parseFloat(row.latitude));
@@ -167,10 +185,9 @@ function App() {
       <Paper elevation={2} sx={{ p: 3, mb: 4, borderRadius: 2 }} key={tableName}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h5" color="primary" sx={{ fontWeight: 600 }}>{tableName}</Typography>
+            <Typography variant="h5" color="primary" sx={{ fontWeight: 600 }}>{tableName} ({tableData.length} 条)</Typography>
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => fetchTableData(tableName)}>刷新数据</Button>
           </Box>
-          
           {tableName === 'locations' && (
             <>
               <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -179,7 +196,6 @@ function App() {
                  <TextField select size="small" label="日" value={filterDay || ''} onChange={(e) => fetchTableData(tableName, { filterDay: e.target.value })} sx={{ width: 80 }}>{availableDays.map(d => <MenuItem key={d} value={d}>{d}</MenuItem>)}</TextField>
                  <TextField select size="small" label="Provider" value={filterProvider || ''} onChange={(e) => fetchTableData(tableName, { filterProvider: e.target.value })} sx={{ width: 120 }}>{availableProviders.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}</TextField>
               </Box>
-
               <LocalizationProvider dateAdapter={AdapterDayjs}>
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                     <TimePicker label="开始" ampm={false} minutesStep={1} value={startTime ? dayjs(startTime, 'HH:mm:ss') : null} onChange={(v: any) => fetchTableData(tableName, { startTime: v?.format('HH:mm:ss') })} slotProps={{ textField: { size: 'small' } }} />
@@ -189,67 +205,29 @@ function App() {
             </>
           )}
         </Box>
-        
         {locationData.length > 0 && amapKey && (
           <Box sx={{ height: 450, mb: 3, borderRadius: 2, overflow: 'hidden', border: '1px solid #ddd' }}>
-            <APILoader akey={amapKey}>
-              <Map 
-                // @ts-ignore
-                center={[locationData[0].displayLng, locationData[0].displayLat]} 
-                zoom={12}
-              >
-                {locationData.map((pos: any, idx: number) => (
-                  <Marker 
-                    key={idx} 
-                    // @ts-ignore
-                    position={[pos.displayLng, pos.displayLat]} 
-                    onClick={() => setActiveMarkerMap({ [tableName]: pos })}
-                  />
-                ))}
-                {activeMarkerMap[tableName] && (
-                  <InfoWindow
-                    // @ts-ignore
-                    position={[activeMarkerMap[tableName].displayLng, activeMarkerMap[tableName].displayLat]}
-                    visible={true}
-                    offset={[25, -35]}
-                    onClose={() => setActiveMarkerMap(prev => { const next = { ...prev }; delete next[tableName]; return next; })}
-                  >
-                    <div className="info-window-card">
-                      <div className="info-window-body">
+            <APILoader akey={amapKey}><Map // @ts-ignore
+                center={[locationData[0].displayLng, locationData[0].displayLat]} zoom={12}>
+                {locationData.map((pos: any, idx: number) => (<Marker key={idx} // @ts-ignore
+                    position={[pos.displayLng, pos.displayLat]} onClick={() => setActiveMarkerMap({ [tableName]: pos })} />))}
+                {activeMarkerMap[tableName] && (<InfoWindow // @ts-ignore
+                    position={[activeMarkerMap[tableName].displayLng, activeMarkerMap[tableName].displayLat]} visible={true} offset={[25, -35]}
+                    onClose={() => setActiveMarkerMap(prev => { const next = { ...prev }; delete next[tableName]; return next; })}>
+                    <div className="info-window-card"><div className="info-window-body">
                         {Object.entries(activeMarkerMap[tableName]).map(([key, val]) => {
                           if (key === 'displayLng' || key === 'displayLat') return null;
-                          return val !== undefined && val !== null ? (
-                            <div className="info-row" key={key}>
-                              <span className="info-label">{key}</span>
-                              <span className="info-value">{String(val)}</span>
-                            </div>
-                          ) : null;
-                        })}
-                      </div>
-                    </div>
-                  </InfoWindow>
-                )}
-              </Map>
-            </APILoader>
+                          return val !== undefined && val !== null ? (<div className="info-row" key={key}><span className="info-label">{key}</span><span className="info-value">{String(val)}</span></div>) : null;
+                        })}</div></div></InfoWindow>)}</Map></APILoader>
           </Box>
         )}
-
-        <TableContainer component={Paper} sx={{ maxHeight: 600, overflowX: 'auto', maxWidth: '100%' }}>
-          <Table stickyHeader size="small">
-            <TableHead>
-              <TableRow>
-                {tableData.length > 0 && Object.keys(tableData[0]).map(k => (
-                  <TableCell key={k} sx={{ bgcolor: '#f5f5f5', fontWeight: 600 }}>{k}</TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {tableData.map((row: any, i: number) => (
-                <TableRow key={i} hover>{Object.values(row).map((v: any, j: number) => <TableCell key={j}>{String(v)}</TableCell>)}</TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+        <TableContainer component={Paper} sx={{ maxHeight: 450, overflowX: 'auto', maxWidth: '100%' }}>
+          <Table stickyHeader size="small"><TableHead><TableRow>{tableData.length > 0 && Object.keys(tableData[0]).map(k => (
+                  <TableCell key={k} sx={{ bgcolor: '#f5f5f5', fontWeight: 600 }}>
+                    <TableSortLabel active={orderBy === k} direction={orderBy === k ? order : 'asc'} onClick={() => handleRequestSort(k)}>{k}</TableSortLabel>
+                  </TableCell>))}</TableRow></TableHead>
+            <TableBody>{sortedData.map((row: any, i: number) => (<TableRow key={i} hover>{Object.values(row).map((v: any, j: number) => <TableCell key={j}>{String(v)}</TableCell>)}</TableRow>))}</TableBody>
+          </Table></TableContainer>
       </Paper>
     );
   }
@@ -263,26 +241,19 @@ function App() {
         </AppBar>
         <Drawer variant="permanent" sx={{ width: DRAWER_WIDTH, flexShrink: 0, '& .MuiDrawer-paper': { width: DRAWER_WIDTH, border: 'none', bgcolor: '#fff' } }}>
           <Toolbar />
-          <List sx={{ px: 2, mt: 1 }}>
-            {tables.map(t => (
+          <List sx={{ px: 2, mt: 1 }}>{tables.map(t => (
               <ListItem key={t} disablePadding sx={{ mb: 1 }}>
                 <ListItemButton onClick={() => handleTableClick(t)} selected={expandedTables.includes(t)} sx={{ borderRadius: 2, '&.Mui-selected': { bgcolor: '#eff6ff', color: '#2563eb' } }}>
                   <ListItemIcon sx={{ color: 'inherit' }}><TableChartIcon /></ListItemIcon>
                   <ListItemText primary={t} />
-                </ListItemButton>
-              </ListItem>
-            ))}
-          </List>
+                </ListItemButton></ListItem>))}</List>
         </Drawer>
         <Box component="main" className="main-content" sx={{ flexGrow: 1, p: 4, display: 'flex', flexDirection: 'column', height: '100vh', minWidth: 0 }}>
           <Toolbar />
           <Box sx={{ width: '100%', flex: 1, overflow: 'auto', pb: 4, minWidth: 0 }}>
             {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
-            {expandedTables.length === 0 && (
-                <Paper sx={{ p: 8, textAlign: 'center', bgcolor: 'transparent', boxShadow: 'none' }}>
-                    <Typography variant="h5" color="text.secondary">请从左侧选择一个数据表开始预览</Typography>
-                </Paper>
-            )}
+            {expandedTables.length === 0 && (<Paper sx={{ p: 8, textAlign: 'center', bgcolor: 'transparent', boxShadow: 'none' }}>
+                    <Typography variant="h5" color="text.secondary">请从左侧选择一个数据表开始预览</Typography></Paper>)}
             {expandedTables.map(t => renderDataPanel(t))}
           </Box>
         </Box>
