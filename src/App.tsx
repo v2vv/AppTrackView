@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { getSupabase } from './supabaseClient'
 import './App.css'
 
@@ -8,6 +8,14 @@ function App() {
   const [tables, setTables] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // 页面加载时从 localStorage 读取保存的凭据
+  useEffect(() => {
+    const savedUrl = localStorage.getItem('supabase_url')
+    const savedKey = localStorage.getItem('supabase_key')
+    if (savedUrl) setUrl(savedUrl)
+    if (savedKey) setKey(savedKey)
+  }, [])
 
   const fetchTables = async () => {
     if (!url || !key) {
@@ -20,8 +28,6 @@ function App() {
     setTables([])
 
     try {
-      // 方法 1: 尝试通过 Postgrest 的根路径获取 OpenAPI 定义
-      // 这通常包含了所有的公开表名，且 Anon Key 即可访问
       const restUrl = `${url.replace(/\/$/, '')}/rest/v1/`
       const response = await fetch(restUrl, {
         headers: {
@@ -30,39 +36,45 @@ function App() {
         }
       })
 
+      let tableNames: string[] = []
+
       if (response.ok) {
         const data = await response.json()
         if (data.definitions) {
-          const tableNames = Object.keys(data.definitions)
-          setTables(tableNames)
-          return
+          tableNames = Object.keys(data.definitions)
         }
       }
 
-      // 方法 2: 如果方法 1 失败（例如 CORS 或自定义路径），尝试使用 RPC (之前的备选方案)
-      const supabase = getSupabase(url, key)
-      const { data: rpcData, error: rpcError } = await supabase.rpc('get_tables')
-      
-      if (!rpcError && rpcData) {
-        setTables(rpcData.map((t: any) => t.table_name || t.tablename))
-      } else {
-        setError(`无法自动获取表。如果您的数据库有表但未显示，请在 Supabase SQL Editor 中运行以下函数以启用 RPC 获取：
+      if (tableNames.length === 0) {
+        const supabase = getSupabase(url, key)
+        const { data: rpcData, error: rpcError } = await supabase.rpc('get_tables')
+        if (!rpcError && rpcData) {
+          tableNames = rpcData.map((t: any) => t.table_name || t.tablename)
+        }
+      }
 
-CREATE OR REPLACE FUNCTION get_tables()
-RETURNS TABLE (table_name text) 
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  RETURN QUERY SELECT tablename::text FROM pg_tables WHERE schemaname = 'public';
-END;
-$$;`)
+      if (tableNames.length > 0) {
+        setTables(tableNames)
+        // 成功获取数据后，将凭据保存到 localStorage
+        localStorage.setItem('supabase_url', url)
+        localStorage.setItem('supabase_key', key)
+      } else {
+        setError(`无法自动获取表。如果您的数据库有表但未显示，请在 Supabase SQL Editor 中运行 get_tables 函数。`)
       }
     } catch (err: any) {
       setError(`连接错误: ${err.message}`)
     } finally {
       setLoading(false)
     }
+  }
+
+  const clearSavedCredentials = () => {
+    localStorage.removeItem('supabase_url')
+    localStorage.removeItem('supabase_key')
+    setUrl('')
+    setKey('')
+    setTables([])
+    alert('已清除保存的凭据')
   }
 
   return (
@@ -82,9 +94,14 @@ $$;`)
           value={key} 
           onChange={(e) => setKey(e.target.value)} 
         />
-        <button onClick={fetchTables} disabled={loading}>
-          {loading ? '正在连接...' : '连接并获取表'}
-        </button>
+        <div className="button-row">
+          <button onClick={fetchTables} disabled={loading} className="primary-btn">
+            {loading ? '正在连接...' : '连接并保存'}
+          </button>
+          <button onClick={clearSavedCredentials} className="secondary-btn">
+            清除保存
+          </button>
+        </div>
       </div>
 
       {error && (
